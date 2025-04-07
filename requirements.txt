@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+websockets
+numpy
+torch
+scipy
+PyAudio
+faster-whisper
+pydantic
+python-multipart
+colorama
+webrtcvad-wheels
+
+# Gemini API
+google-generativeai>=0.8.0
+python-dotenv>=1.0.0
