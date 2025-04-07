@@ -4,6 +4,7 @@ import asyncio
 from app.audio.audio_processor import AudioProcessor
 import traceback
 import time
+from app import config
 
 class TranscriptionService:
     """转写服务，管理音频处理和转写"""
@@ -32,11 +33,12 @@ class TranscriptionService:
             # 存储客户端信息
             self.clients[client_id] = {
                 'processor': processor,
+                'callback': callback,
                 'language': language,
                 'model_type': model_type,
-                'callback': callback,
                 'debug_mode': debug_mode,
-                'registered_at': time.time()
+                'target_language': 'en',  # 默认翻译为英文
+                'registered_at': time.time(),
             }
             
             # 启动处理器
@@ -110,15 +112,8 @@ class TranscriptionService:
         self, 
         client_id, 
         language=None, 
-        model_type=None, 
-        debug_mode=None,
-        enable_realtime_transcription=None,
-        use_main_model_for_realtime=None,
-        realtime_model_type=None,
-        realtime_processing_pause=None,
-        stabilization_window=None,
-        match_threshold=None,
-        noise_suppression=None
+        model_type=None,
+        target_language=None
     ):
         """更新客户端配置"""
         if client_id not in self.clients:
@@ -131,6 +126,12 @@ class TranscriptionService:
             processor = client['processor']
             callback = client['callback']
             
+            # 记录所有传入的配置参数
+            self.logger.info(f"配置更新请求参数:")
+            self.logger.info(f"  language: {language}")
+            self.logger.info(f"  model_type: {model_type}")
+            self.logger.info(f"  target_language: {target_language}")
+            
             # 记录配置变更
             if language is not None and language != client.get('language'):
                 self.logger.info(f"语言: {client.get('language')} -> {language}")
@@ -140,69 +141,102 @@ class TranscriptionService:
                 self.logger.info(f"模型: {client.get('model_type')} -> {model_type}")
                 client['model_type'] = model_type
             
-            if debug_mode is not None and debug_mode != client.get('debug_mode'):
-                self.logger.info(f"调试模式: {client.get('debug_mode')} -> {debug_mode}")
-                client['debug_mode'] = debug_mode
-
-            # 更新实时转写配置
-            if enable_realtime_transcription is not None:
-                client['enable_realtime_transcription'] = enable_realtime_transcription
-                self.logger.info(f"实时转写: {enable_realtime_transcription}")
-
-            if use_main_model_for_realtime is not None:
-                client['use_main_model_for_realtime'] = use_main_model_for_realtime
-                self.logger.info(f"使用主模型进行实时转写: {use_main_model_for_realtime}")
-
-            if realtime_model_type is not None:
-                client['realtime_model_type'] = realtime_model_type
-                self.logger.info(f"实时转写模型: {realtime_model_type}")
-
-            if realtime_processing_pause is not None:
-                client['realtime_processing_pause'] = realtime_processing_pause
-                self.logger.info(f"实时处理暂停时间: {realtime_processing_pause}")
-
-            if stabilization_window is not None:
-                client['stabilization_window'] = stabilization_window
-                self.logger.info(f"稳定化窗口: {stabilization_window}")
-
-            if match_threshold is not None:
-                client['match_threshold'] = match_threshold
-                self.logger.info(f"匹配阈值: {match_threshold}")
-
-            if noise_suppression is not None:
-                client['noise_suppression'] = noise_suppression
-                self.logger.info(f"噪声抑制: {noise_suppression}")
+            if target_language is not None and target_language != client.get('target_language'):
+                self.logger.info(f"翻译目标语言: {client.get('target_language')} -> {target_language}")
+                client['target_language'] = target_language
             
+            # 验证语言和模型是否在支持的列表中
+            if client['language'] not in config.AVAILABLE_LANGUAGES:
+                self.logger.error(f"不支持的语言: {client['language']}")
+                return False
+            
+            if client['model_type'] not in config.AVAILABLE_MODELS:
+                self.logger.error(f"不支持的模型: {client['model_type']}")
+                return False
+            
+            # 检查语言和模型组合是否兼容
+            self.logger.info(f"验证语言和模型组合: {client['language']}/{client['model_type']}")
+            
+            self.logger.info(f"停止旧处理器...")
             # 停止旧处理器
             await processor.stop()
             
+            # 记录创建新处理器的详细信息
+            self.logger.info(f"创建新的AudioProcessor实例:")
+            self.logger.info(f"  语言: {client['language']}")
+            self.logger.info(f"  模型: {client['model_type']}")
+            
             # 创建新处理器
-            new_processor = AudioProcessor(
-                language=client['language'],
-                model_type=client['model_type'],
-                callback=callback,
-                debug_mode=client.get('debug_mode', False),
-                enable_realtime_transcription=client.get('enable_realtime_transcription', True),
-                use_main_model_for_realtime=client.get('use_main_model_for_realtime', True),
-                realtime_model_type=client.get('realtime_model_type', 'tiny'),
-                realtime_processing_pause=client.get('realtime_processing_pause', 0.2),
-                stabilization_window=client.get('stabilization_window', 2),
-                match_threshold=client.get('match_threshold', 10),
-                noise_suppression=client.get('noise_suppression', False)
-            )
-            
-            # 更新客户端处理器
-            client['processor'] = new_processor
-            
-            # 启动新处理器
-            await new_processor.start()
-            
-            self.logger.info(f"客户端 {client_id} 配置更新成功")
-            return True
+            try:
+                # 添加更多日志和异常捕获
+                self.logger.info(f"语言检查: {client['language']} 是否在可用语言列表中: {'是' if client['language'] in config.AVAILABLE_LANGUAGES else '否'}")
+                self.logger.info(f"模型检查: {client['model_type']} 是否在可用模型列表中: {'是' if client['model_type'] in config.AVAILABLE_MODELS else '否'}")
+                self.logger.info(f"调用AudioProcessor构造函数...")
+                
+                try:
+                    new_processor = AudioProcessor(
+                        language=client['language'],
+                        model_type=client['model_type'],
+                        callback=callback,
+                        debug_mode=client.get('debug_mode', False)
+                    )
+                except ValueError as ve:
+                    self.logger.error(f"创建处理器时出现值错误: {ve}")
+                    raise
+                except RuntimeError as re:
+                    self.logger.error(f"创建处理器时出现运行时错误: {re}")
+                    raise
+                except Exception as e:
+                    self.logger.error(f"创建处理器时出现其他错误: {e}, 类型: {type(e).__name__}")
+                    raise
+                
+                self.logger.info(f"AudioProcessor构造成功，处理器配置:")
+                self.logger.info(f"  语言: {new_processor.language}")
+                self.logger.info(f"  模型: {new_processor.model_type}")
+                self.logger.info(f"  设备: {new_processor.device}")
+                
+                # 更新客户端处理器
+                client['processor'] = new_processor
+                
+                # 启动新处理器
+                self.logger.info(f"启动新处理器...")
+                await new_processor.start()
+                
+                self.logger.info(f"客户端 {client_id} 配置更新成功")
+                return True
+            except Exception as e:
+                self.logger.error(f"创建新处理器失败: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                # 尝试恢复旧处理器
+                self.logger.info(f"尝试恢复旧处理器...")
+                try:
+                    await processor.start()
+                    self.logger.info(f"旧处理器恢复成功")
+                except Exception as e2:
+                    self.logger.error(f"恢复旧处理器失败: {str(e2)}")
+                return False
         except Exception as e:
             self.logger.error(f"更新客户端 {client_id} 配置时出错: {str(e)}")
             self.logger.error(traceback.format_exc())
             return False
+    
+    def get_client_config(self, client_id):
+        """获取客户端当前配置"""
+        if client_id not in self.clients:
+            return {"error": "客户端未注册"}
+        
+        client = self.clients[client_id]
+        # 返回客户端配置的副本
+        return {
+            "client_id": client_id,
+            "language": client.get('language', 'unknown'),
+            "model_type": client.get('model_type', 'unknown'),
+            "target_language": client.get('target_language', 'en'),
+            "debug_mode": client.get('debug_mode', False),
+            "registered_at": client.get('registered_at', 0),
+            "processor_running": client['processor'].running if 'processor' in client else False,
+            "active": True,
+        }
 
     async def cleanup(self) -> None:
         """清理所有客户端资源"""

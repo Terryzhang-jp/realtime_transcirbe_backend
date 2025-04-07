@@ -8,6 +8,7 @@ import traceback
 import time
 from app.services.transcription import TranscriptionService
 from app.services.text_processor import text_processor
+from app import config
 
 # 创建路由器
 router = APIRouter()
@@ -23,6 +24,174 @@ audio_stats: Dict[str, Dict[str, Any]] = {}
 async def get_transcription_service() -> TranscriptionService:
     """依赖注入：获取转写服务实例"""
     return transcription_service
+
+@router.get("/ws/status", response_model=Dict[str, Any])
+async def get_websocket_status():
+    """获取当前所有WebSocket连接状态和配置信息"""
+    logger = logging.getLogger("API:ws-status")
+    
+    # 收集活跃连接信息
+    connections_info = []
+    for client_id, websocket in active_connections.items():
+        # 获取客户端配置
+        config = transcription_service.get_client_config(client_id)
+        
+        # 获取音频统计（如果有）
+        stats = {}
+        if client_id in audio_stats:
+            stats = audio_stats[client_id]
+        
+        # 合并信息
+        conn_info = {
+            "client_id": client_id,
+            "connected": True,
+            "config": config,
+            "audio_stats": {
+                "total_chunks": stats.get("total_chunks", 0),
+                "total_bytes": stats.get("total_bytes", 0),
+                "first_chunk_time": stats.get("first_chunk_time"),
+                "last_chunk_time": stats.get("last_chunk_time"),
+            }
+        }
+        connections_info.append(conn_info)
+    
+    # 获取所有注册客户端（可能有些已断开连接但仍在服务中）
+    registered_clients = []
+    for client_id, client in transcription_service.clients.items():
+        if client_id not in [c["client_id"] for c in connections_info]:
+            config = transcription_service.get_client_config(client_id)
+            registered_clients.append({
+                "client_id": client_id,
+                "connected": False,
+                "config": config,
+                "disconnected": True
+            })
+    
+    logger.info(f"当前活跃连接: {len(connections_info)}")
+    logger.info(f"已注册但未连接的客户端: {len(registered_clients)}")
+    
+    # 返回结果
+    return {
+        "timestamp": time.time(),
+        "active_connections": len(connections_info),
+        "registered_clients": len(transcription_service.clients),
+        "connections": connections_info + registered_clients
+    }
+
+@router.get("/ws/client/{client_id}/config")
+async def get_client_config(client_id: str):
+    """获取特定客户端的配置信息（用于调试）"""
+    logger = logging.getLogger(f"API:client-config:{client_id}")
+    
+    if client_id not in transcription_service.clients:
+        return {"error": "客户端不存在", "client_id": client_id}
+    
+    # 获取客户端配置
+    config = transcription_service.get_client_config(client_id)
+    
+    # 获取处理器的原始配置
+    client = transcription_service.clients[client_id]
+    processor = client.get('processor')
+    
+    # 增加处理器信息，更全面地了解语言设置
+    processor_info = {
+        "language": getattr(processor, "language", "unknown"),
+        "model_type": getattr(processor, "model_type", "unknown"),
+        "device": getattr(processor, "device", "unknown"),
+        "running": getattr(processor, "running", False),
+        "initial_prompt": getattr(processor, "initial_prompt", ""),
+    }
+    
+    logger.info(f"获取客户端 {client_id} 配置")
+    logger.info(f"客户端配置: {config}")
+    logger.info(f"处理器配置: {processor_info}")
+    
+    return {
+        "client_id": client_id,
+        "config": config,
+        "processor": processor_info,
+        "connected": client_id in active_connections,
+        "timestamp": time.time()
+    }
+
+@router.post("/ws/client/{client_id}/config")
+async def update_client_config(client_id: str, config: Dict[str, Any]):
+    """更新特定客户端的配置（用于调试）"""
+    logger = logging.getLogger(f"API:update-config:{client_id}")
+    logger.info(f"手动更新客户端 {client_id} 配置: {config}")
+    
+    if client_id not in transcription_service.clients:
+        return {"error": "客户端不存在", "client_id": client_id}
+    
+    # 语言和模型检查
+    language = config.get("language")
+    # 同时支持model和model_type字段
+    model_type = config.get("model_type") or config.get("model")
+    target_language = config.get("target_language", "en")
+    
+    # 记录详细的字段信息
+    logger.info(f"接收到的配置字段: language={language}, model_type={model_type}, target_language={target_language}")
+    
+    if language and language not in config.AVAILABLE_LANGUAGES:
+        logger.error(f"配置中的语言 {language} 不在支持的语言列表中")
+        return {"success": False, "client_id": client_id, "message": f"不支持的语言: {language}"}
+    
+    if model_type and model_type not in config.AVAILABLE_MODELS:
+        logger.error(f"配置中的模型 {model_type} 不在支持的模型列表中")
+        return {"success": False, "client_id": client_id, "message": f"不支持的模型: {model_type}"}
+    
+    # 获取当前配置用于比较
+    current_config = transcription_service.get_client_config(client_id)
+    logger.info(f"当前配置: {current_config}")
+    
+    # 传递配置
+    try:
+        # 记录详细的操作过程
+        logger.info(f"开始更新配置...")
+        
+        success = await transcription_service.update_client_config(
+            client_id=client_id,
+            language=language,
+            model_type=model_type,
+            target_language=target_language
+        )
+        
+        if success:
+            # 获取更新后的配置
+            new_config = transcription_service.get_client_config(client_id)
+            logger.info(f"客户端 {client_id} 配置更新成功")
+            logger.info(f"新配置: {new_config}")
+            return {"success": True, "client_id": client_id, "message": "配置已成功更新", "config": new_config}
+        else:
+            logger.error(f"客户端 {client_id} 配置更新失败")
+            # 获取更详细的错误原因
+            client = transcription_service.clients[client_id]
+            processor_info = None
+            if 'processor' in client:
+                processor = client['processor']
+                processor_info = {
+                    "language": getattr(processor, "language", "unknown"),
+                    "model_type": getattr(processor, "model_type", "unknown"),
+                    "running": getattr(processor, "running", False)
+                }
+            
+            return {
+                "success": False, 
+                "client_id": client_id, 
+                "message": "配置更新失败",
+                "current_config": current_config,
+                "processor_info": processor_info
+            }
+    except Exception as e:
+        logger.error(f"更新过程发生异常: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "success": False, 
+            "client_id": client_id, 
+            "message": f"配置更新过程中发生错误: {str(e)}",
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
 
 @router.websocket("/ws/transcribe/{client_id}")
 async def websocket_transcribe(
@@ -152,7 +321,9 @@ async def websocket_transcribe(
                         if event_type == "config":
                             config = message.get("config", {})
                             language = config.get("language", "zh")
-                            model_type = config.get("model", "tiny")
+                            # 同时支持model和model_type字段
+                            model_type = config.get("model_type") or config.get("model", "tiny")
+                            target_language = config.get("target_language", "en")
                             
                             # 立即发送配置接收确认
                             await websocket.send_json({
@@ -161,18 +332,12 @@ async def websocket_transcribe(
                             })
                             
                             # 更新客户端配置
-                            logger.info(f"更新客户端配置: language={language}, model={model_type}")
+                            logger.info(f"更新客户端配置: language={language}, model_type={model_type}, target_language={target_language}")
                             success = await service.update_client_config(
                                 client_id=client_id,
                                 language=language,
                                 model_type=model_type,
-                                enable_realtime_transcription=config.get("enable_realtime_transcription", True),
-                                use_main_model_for_realtime=config.get("use_main_model_for_realtime", True),
-                                realtime_model_type=config.get("realtime_model_type", "tiny"),
-                                realtime_processing_pause=config.get("realtime_processing_pause", 0.2),
-                                stabilization_window=config.get("stabilization_window", 2),
-                                match_threshold=config.get("match_threshold", 10),
-                                noise_suppression=config.get("noise_suppression", False)
+                                target_language=target_language
                             )
                             
                             if success:
@@ -181,7 +346,7 @@ async def websocket_transcribe(
                                     "status": "success",
                                     "config": config
                                 })
-                                logger.info(f"配置已更新: language={language}, model={model_type}")
+                                logger.info(f"配置已更新: language={language}, model_type={model_type}")
                             else:
                                 await websocket.send_json({
                                     "event": "config_updated",
@@ -271,6 +436,7 @@ async def send_transcription_result(text: str) -> None:
                 if client_id in transcription_service.clients:
                     client = transcription_service.clients[client_id]
                     client_language = client.get('language', 'zh')
+                    target_language = client.get('target_language', 'en')
                 
                 # 调用文本处理服务
                 logger.info(f"开始处理文本: {text[:30]}...")
