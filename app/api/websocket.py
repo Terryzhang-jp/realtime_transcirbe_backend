@@ -466,6 +466,7 @@ async def send_transcription_result(text: str) -> None:
                     "text": text,
                     "refined_text": processed_result.get("refined_text", text),
                     "translation": processed_result.get("translation", ""),
+                    "context_enhanced": processed_result.get("context_enhanced", False),
                     "timestamp": timestamp,
                     "source_language": client_language,
                     "target_language": target_language

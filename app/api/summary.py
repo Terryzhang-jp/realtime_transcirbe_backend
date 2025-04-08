@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 from app.services.summary_service import summary_service
+from app.services.summary_context import summary_context_service
 
 # 创建API路由
 router = APIRouter()
@@ -20,12 +21,22 @@ class TranscriptionItem(BaseModel):
 class SummaryRequest(BaseModel):
     transcriptions: List[TranscriptionItem]
 
+class SummaryContextRequest(BaseModel):
+    scene: str
+    topic: str
+    keyPoints: List[str]
+    summary: str
+
 # 定义响应模型
 class SummaryResponse(BaseModel):
     scene: str
     topic: str
     keyPoints: List[str]
     summary: str
+
+class StatusResponse(BaseModel):
+    status: str
+    message: str
 
 @router.post("/summary", response_model=SummaryResponse)
 async def generate_summary(request: SummaryRequest):
@@ -53,4 +64,34 @@ async def generate_summary(request: SummaryRequest):
         )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"生成总结时出错: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"生成总结时出错: {str(e)}")
+
+@router.post("/summary/context", response_model=StatusResponse)
+async def set_summary_context(request: SummaryContextRequest):
+    """
+    设置会话总结上下文
+    
+    接收会话总结信息，用于增强文本优化和翻译功能
+    """
+    try:
+        # 将请求数据传递给上下文服务
+        success = summary_context_service.set_context({
+            "scene": request.scene,
+            "topic": request.topic,
+            "keyPoints": request.keyPoints,
+            "summary": request.summary
+        })
+        
+        if success:
+            return StatusResponse(
+                status="success",
+                message="会话总结上下文设置成功"
+            )
+        else:
+            return StatusResponse(
+                status="error",
+                message="设置会话总结上下文失败"
+            )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"设置总结上下文时出错: {str(e)}") 

@@ -10,6 +10,10 @@ from app import config
 from app.api.test import router as test_router  # 导入新的测试路由
 from app.api.summary import router as summary_router
 
+# 预加载服务，确保单例实例已初始化
+from app.services.text_processor import text_processor
+from app.services.summary_context import summary_context_service
+
 # 定义服务名称
 SERVICE_NAME = "实时语音转写系统"
 

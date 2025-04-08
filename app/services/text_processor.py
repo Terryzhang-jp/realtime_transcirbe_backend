@@ -7,6 +7,9 @@ from typing import Dict, Optional, Tuple, Any
 import asyncio
 from dotenv import load_dotenv
 
+# 导入会话总结上下文服务
+from app.services.summary_context import summary_context_service
+
 # 加载环境变量
 load_dotenv()
 
@@ -115,22 +118,36 @@ class TextProcessor:
         source_lang_name = language_names.get(source_language, source_language)
         target_lang_name = language_names.get(target_language, target_language)
         
+        # 检查是否有会话总结上下文
+        context_prompt = ""
+        using_context = False
+        if summary_context_service.has_summary_context():
+            context_prompt = f"""
+会话上下文：
+{summary_context_service.get_context_prompt()}
+
+请根据上述会话上下文信息，更准确地理解和处理以下文本。确保修正和翻译与会话的主题、场景和关键点保持一致。
+"""
+            self.logger.info("已添加会话总结上下文到文本处理提示词中")
+            using_context = True
+        
         # 构建提示词
         prompt = f"""
-        原始文本 ({source_lang_name}): {text}
-        
-        任务:
-        1. Refinement: 修正上述文本中的错别字和语法错误，保持原意。
-        2. 翻译: 将上述文本翻译成{target_lang_name}。
-        
-        请使用以下JSON格式输出结果:
-        {{
-          "refined_text": "修正后的文本",
-          "translation": "翻译后的文本"
-        }}
-        
-        只输出JSON格式的结果，不要添加任何其他解释或注释。
-        """
+{context_prompt}
+原始文本 ({source_lang_name}): {text}
+
+任务:
+1. Refinement: 修正上述文本中的错别字和语法错误，保持原意。如果有会话上下文，请确保修正后的文本与整体会话内容保持一致。
+2. 翻译: 将上述文本翻译成{target_lang_name}。如果有会话上下文，请确保翻译与会话的主题和关键点一致。
+
+请使用以下JSON格式输出结果:
+{{
+  "refined_text": "修正后的文本",
+  "translation": "翻译后的文本"
+}}
+
+只输出JSON格式的结果，不要添加任何其他解释或注释。
+"""
         
         # 调用Gemini API
         response = self.model.generate_content(prompt)
@@ -161,6 +178,9 @@ class TextProcessor:
                 result["refined_text"] = text
             if "translation" not in result:
                 result["translation"] = ""
+            
+            # 添加是否使用上下文的标记
+            result["context_enhanced"] = using_context
                 
             return result
             
@@ -169,7 +189,8 @@ class TextProcessor:
             self.logger.error(f"原始响应: {response.text}")
             return {
                 "refined_text": text,
-                "translation": ""
+                "translation": "",
+                "context_enhanced": using_context
             }
 
 # 创建单例实例
