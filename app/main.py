@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 import logging
@@ -8,6 +8,7 @@ from app.api import websocket
 from app.audio.audio_input import AudioInput
 from app import config
 from app.api.test import router as test_router  # 导入新的测试路由
+from app.api.summary import router as summary_router
 
 # 定义服务名称
 SERVICE_NAME = "实时语音转写系统"
@@ -16,8 +17,10 @@ SERVICE_NAME = "实时语音转写系统"
 logging.basicConfig(
     level=logging.DEBUG if config.DEBUG else logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=config.LOG_FILE,
-    filemode="a"
+    handlers=[
+        logging.StreamHandler(),
+        logging.handlers.RotatingFileHandler(config.LOG_FILE, maxBytes=10485760, backupCount=5)
+    ]
 )
 
 logger = logging.getLogger(SERVICE_NAME)
@@ -42,6 +45,7 @@ app.add_middleware(
 # 注册WebSocket路由
 app.include_router(websocket.router)
 app.include_router(test_router)  # 注册测试路由
+app.include_router(summary_router, prefix="/api")
 
 @app.get("/")
 async def root():

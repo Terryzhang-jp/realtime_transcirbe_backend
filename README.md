@@ -33,18 +33,41 @@ cd realtime_transcirbe_backend
 pip install -r requirements.txt
 ```
 
-3. 配置环境变量
+3. 安装FFmpeg（用于Silero VAD）
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install ffmpeg
+
+# CentOS/RHEL
+sudo yum install ffmpeg
+```
+
+4. 配置环境变量
 ```bash
 cp .env.example .env
 # 编辑.env文件，填入必要的API密钥
 ```
 
-4. 运行服务
+5. 运行服务
 ```bash
 ./run.sh
 # 或者
 python -m uvicorn app.main:app --reload
 ```
+
+## 可能的问题与解决方案
+
+### FFmpeg相关错误
+
+如果您在启动时看到与FFmpeg相关的错误（例如找不到libavcodec.XX.dylib），这是因为Silero VAD依赖于FFmpeg。虽然系统会自动回退到WebRTC VAD，但如果您希望使用更准确的Silero VAD，请确保正确安装FFmpeg。
+
+### WebSocket连接问题
+
+如果WebSocket连接频繁断开，请检查网络稳定性，并确保客户端正确处理重连逻辑。
 
 ## API接口
 

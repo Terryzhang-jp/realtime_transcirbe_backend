@@ -2,6 +2,7 @@ import numpy as np
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import BatchedInferencePipeline
 import torch
+import torchaudio
 import webrtcvad
 import logging
 import threading
@@ -15,13 +16,6 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 import re
-
-# 检查是否安装了pvporcupine
-try:
-    import pvporcupine
-    PORCUPINE_AVAILABLE = True
-except ImportError:
-    PORCUPINE_AVAILABLE = False
 
 class AudioProcessor:
     def __init__(
@@ -50,13 +44,28 @@ class AudioProcessor:
     ):
         self.language = language
         self.model_type = model_type
+        self.device = device
+        self.compute_type = compute_type
+        self.debug_mode = debug_mode
         self.callback = callback
         self.realtime_callback = realtime_callback
-        self.sample_rate = config.DEFAULT_SAMPLE_RATE  # 固定采样率
+
+        # 设置日志记录器
+        self.logger = logging.getLogger(__name__)
+        if debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
+
+        # 设置 torchaudio 后端为 soundfile 以避免 FFmpeg 相关警告
+        try:
+            torchaudio.set_audio_backend("soundfile")
+            self.logger.info("已将 torchaudio 后端设置为 soundfile")
+        except Exception as e:
+            self.logger.warning(f"设置 torchaudio 后端失败: {e}")
+
+        self.sample_rate = config.DEFAULT_SAMPLE_RATE
         self.vad_model = webrtcvad.Vad(3)  # 使用最高灵敏度
-        self.debug_mode = debug_mode
-        self.device = device  # 保存设备信息
-        self.compute_type = compute_type  # 保存计算类型
         
         # VAD设置
         self.bypass_vad = False  # 启用VAD检测
@@ -64,7 +73,7 @@ class AudioProcessor:
         self.vad_threshold = 0.8  # VAD检测阈值
         self.use_silero_vad = False  # 是否使用Silero VAD
         self.silero_vad_model = None  # Silero VAD模型
-        self.porcupine = None  # 唤醒词检测模型
+        self.silero_utils = None  # Silero VAD工具函数
         
         # 音频缓冲相关设置
         self.audio_buffer = []
@@ -86,14 +95,6 @@ class AudioProcessor:
         self.use_multiprocessing = False  # 默认不使用多进程
         self.transcript_queue = None
         self.transcript_process = None
-        
-        # 配置日志
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(f"AudioProcessor-{language}-{model_type}")
-        self.logger.setLevel(logging.DEBUG)
         
         # 日志配置信息
         self.logger.info(f"初始化AudioProcessor: language={language}, model_type={model_type}")
@@ -132,11 +133,12 @@ class AudioProcessor:
         # 初始化Silero VAD
         self.logger.info("正在初始化Silero VAD...")
         try:
-            self.silero_vad_model, _ = torch.hub.load(
-                "snakers4/silero-vad", 
-                "silero_vad", 
-                force_reload=False
+            model, utils = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad',
+                model='silero_vad'
             )
+            self.silero_vad_model = model
+            self.silero_utils = utils
             self.silero_vad_model.to(device)
             self.use_silero_vad = True
             self.logger.info("Silero VAD初始化成功")
@@ -144,20 +146,8 @@ class AudioProcessor:
             self.logger.warning(f"Silero VAD初始化失败: {e}, 使用WebRTC VAD")
             self.use_silero_vad = False
             
-        # 初始化唤醒词检测
-        if PORCUPINE_AVAILABLE:
-            self.logger.info("正在初始化唤醒词检测...")
-            try:
-                self.porcupine = pvporcupine.create(
-                    keywords=["hey computer", "ok assistant"],
-                    sensitivities=[0.7, 0.7]
-                )
-                self.logger.info("唤醒词检测初始化成功")
-            except Exception as e:
-                self.logger.warning(f"唤醒词检测初始化失败: {e}")
-                self.porcupine = None
-        else:
-            self.logger.warning("未找到pvporcupine库，唤醒词检测未启用")
+        # 移除唤醒词检测初始化
+        self.logger.info("唤醒词检测功能已禁用")
             
         # 初始化多进程处理
         if self.use_multiprocessing:
@@ -496,10 +486,27 @@ class AudioProcessor:
         try:
             self.silero_working = True
             
+            # 确定所需的样本数
+            num_samples = 512 if self.sample_rate == 16000 else 256
+            
+            # 如果音频数据太长，只取所需长度
+            if len(audio_data) > num_samples:
+                audio_data = audio_data[:num_samples]
+            # 如果音频数据太短，用0填充
+            elif len(audio_data) < num_samples:
+                padding = np.zeros(num_samples - len(audio_data), dtype=np.int16)
+                audio_data = np.concatenate([audio_data, padding])
+            
+            # 转换为float32并归一化
             tensor_data = torch.tensor(audio_data).float()
             tensor_data = tensor_data.to(self.device if self.device.startswith('cuda') else 'cpu')
             tensor_data = tensor_data / 32768.0
             
+            # 添加批次维度
+            if len(tensor_data.shape) == 1:
+                tensor_data = tensor_data.unsqueeze(0)
+            
+            # 使用Silero VAD进行检测
             speech_prob = self.silero_vad_model(tensor_data, self.sample_rate).item()
             is_speech = speech_prob > 0.5
             
@@ -513,6 +520,7 @@ class AudioProcessor:
             
         except Exception as e:
             self.logger.error(f"Silero VAD处理出错: {e}")
+            self.logger.error(traceback.format_exc())
             self.silero_working = False
             return False
 

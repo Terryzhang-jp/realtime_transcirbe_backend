@@ -333,6 +333,8 @@ async def websocket_transcribe(
                             
                             # 更新客户端配置
                             logger.info(f"更新客户端配置: language={language}, model_type={model_type}, target_language={target_language}")
+                            
+                            # 更新服务配置
                             success = await service.update_client_config(
                                 client_id=client_id,
                                 language=language,
@@ -362,10 +364,15 @@ async def websocket_transcribe(
                 logger.error(f"处理WebSocket消息时出错: {e}")
                 logger.error(traceback.format_exc())
                 try:
-                    await websocket.send_json({
-                        "event": "error",
-                        "message": f"处理消息时出错: {str(e)}"
-                    })
+                    # 检查连接状态，避免在连接已断开时尝试发送消息
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name == "CONNECTED":
+                        await websocket.send_json({
+                            "event": "error",
+                            "message": f"处理消息时出错: {str(e)}"
+                        })
+                    else:
+                        logger.error("无法发送错误消息，连接可能已断开")
+                        break
                 except:
                     logger.error("无法发送错误消息，连接可能已断开")
                     break
@@ -376,18 +383,19 @@ async def websocket_transcribe(
         logger.error(f"WebSocket处理时出错: {e}")
         logger.error(traceback.format_exc())
     finally:
-        # 清理资源
-        if client_id in active_connections:
-            del active_connections[client_id]
-        if client_id in audio_stats:
-            stats = audio_stats[client_id]
-            if stats["first_chunk_time"] is not None:
-                duration = time.time() - stats["first_chunk_time"]
-                logger.info(f"会话统计: 总块数={stats['total_chunks']}, 总字节数={stats['total_bytes']}, "
-                          f"持续时间={duration:.1f}秒")
-            del audio_stats[client_id]
-        await service.unregister_client(client_id)
-        logger.info(f"客户端资源已清理: {client_id}")
+        # 在websocket关闭时确保清理资源
+        try:
+            # 注销客户端
+            await service.unregister_client(client_id)
+            # 移除连接
+            if client_id in active_connections:
+                del active_connections[client_id]
+            # 移除音频统计
+            if client_id in audio_stats:
+                del audio_stats[client_id]
+            logger.info(f"客户端资源已清理: {client_id}")
+        except Exception as e:
+            logger.error(f"清理客户端资源时出错: {e}")
 
 async def send_transcription_result(text: str) -> None:
     """将转写结果发送给客户端
