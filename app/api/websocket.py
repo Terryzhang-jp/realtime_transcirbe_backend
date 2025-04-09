@@ -277,7 +277,7 @@ async def websocket_transcribe(
                     now = time.time()
                     
                     # 记录详细的音频调试信息
-                    logger.debug(f"收到音频数据: {len(audio_data)} 字节")
+                    #logger.debug(f"收到音频数据: {len(audio_data)} 字节")
                     
                     # 更新音频统计
                     stats = audio_stats[client_id]
@@ -354,6 +354,42 @@ async def websocket_transcribe(
                                     "event": "config_updated",
                                     "status": "error",
                                     "message": "更新配置失败"
+                                })
+                                
+                        # 处理关键词事件
+                        elif event_type == "keywords":
+                            keywords = message.get("keywords", [])
+                            
+                            # 验证关键词格式
+                            if not isinstance(keywords, list):
+                                logger.warning(f"关键词格式无效，应为列表: {keywords}")
+                                await websocket.send_json({
+                                    "event": "keywords_updated",
+                                    "status": "error",
+                                    "message": "关键词格式无效，应为列表"
+                                })
+                                continue
+                            
+                            logger.info(f"收到关键词配置: {keywords}")
+                            
+                            # 更新客户端关键词
+                            success = await service.update_client_keywords(
+                                client_id=client_id,
+                                keywords=keywords
+                            )
+                            
+                            if success:
+                                await websocket.send_json({
+                                    "event": "keywords_updated",
+                                    "status": "success",
+                                    "keywords": keywords
+                                })
+                                logger.info(f"关键词已更新: {keywords}")
+                            else:
+                                await websocket.send_json({
+                                    "event": "keywords_updated",
+                                    "status": "error",
+                                    "message": "更新关键词失败"
                                 })
                     except json.JSONDecodeError:
                         logger.warning(f"接收到无效的JSON消息")
@@ -439,23 +475,63 @@ async def send_transcription_result(text: str) -> None:
                 # 获取客户端语言配置
                 client_language = "zh"  # 默认中文
                 target_language = "en"  # 默认翻译为英文
+                keywords = []          # 默认关键词为空列表
                 
                 # 如果能获取到客户端配置，则使用配置中的语言
                 if client_id in transcription_service.clients:
                     client = transcription_service.clients[client_id]
                     client_language = client.get('language', 'zh')
                     target_language = client.get('target_language', 'en')
+                    keywords = client.get('keywords', [])
+                    logger.info(f"客户端配置: 语言={client_language}, 目标语言={target_language}")
+                    if keywords:
+                        logger.info(f"客户端关键词: {keywords}")
+                
+                # 管理历史句子
+                if client_id not in transcription_service.client_history:
+                    transcription_service.client_history[client_id] = []
+                    logger.info(f"为客户端 {client_id} 创建历史句子存储")
+                
+                # 获取历史句子
+                history = transcription_service.client_history[client_id]
+                if history:
+                    logger.info(f"客户端 {client_id} 的历史句子数量: {len(history)}")
                 
                 # 调用文本处理服务
                 logger.info(f"开始处理文本: {text[:30]}...")
                 processed_result = await text_processor.process_text(
                     text=text,
+                    history=history,
                     source_language=client_language,
-                    target_language=target_language
+                    target_language=target_language,
+                    keywords=keywords
                 )
+                
+                # 获取连贯性判断结果
+                is_continuation = processed_result.get("is_continuation", False)
+
+                # 根据连贯性判断决定如何更新历史
+                if is_continuation and history:
+                    # 如果是连续文本且历史不为空，用当前文本替换历史最后一个
+                    history[-1] = text  # 用原始文本替换
+                    logger.info(f"检测到连续文本，替换历史中的最后一条")
+                else:
+                    # 否则添加为新条目
+                    history.append(text)
+                    # 保持最多3条历史
+                    if len(history) > 3:
+                        history.pop(0)
+                        logger.info(f"历史句子数量超过3条，移除最旧的句子")
                 
                 logger.info(f"文本处理结果: 优化={processed_result['refined_text'][:30]}...")
                 logger.info(f"文本处理结果: 翻译={processed_result['translation'][:30]}...")
+                logger.info(f"是否匹配关键词: {processed_result.get('is_keyword_match', False)}")
+                if processed_result.get('is_keyword_match', False):
+                    logger.info(f"匹配的关键词: {processed_result.get('matched_keywords', [])}")
+                    logger.info(f"匹配原因: {processed_result.get('match_reason', '未提供')}")
+                logger.info(f"是否是连续文本: {processed_result.get('is_continuation', False)}")
+                if processed_result.get('is_continuation', False):
+                    logger.info(f"连续原因: {processed_result.get('continuation_reason', '')[:50]}...")
                 
                 # 向客户端发送结果
                 websocket = active_connections[client_id]
@@ -466,6 +542,11 @@ async def send_transcription_result(text: str) -> None:
                     "text": text,
                     "refined_text": processed_result.get("refined_text", text),
                     "translation": processed_result.get("translation", ""),
+                    "is_keyword_match": processed_result.get("is_keyword_match", False),
+                    "matched_keywords": processed_result.get("matched_keywords", []),
+                    "match_reason": processed_result.get("match_reason", ""),
+                    "is_continuation": processed_result.get("is_continuation", False),
+                    "continuation_reason": processed_result.get("continuation_reason", ""),
                     "context_enhanced": processed_result.get("context_enhanced", False),
                     "timestamp": timestamp,
                     "source_language": client_language,

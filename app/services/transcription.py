@@ -12,6 +12,7 @@ class TranscriptionService:
     def __init__(self):
         """初始化转写服务"""
         self.clients = {}
+        self.client_history = {}  # 存储每个客户端的历史句子，格式: {client_id: [句子1, 句子2, 句子3]}
         self.logger = logging.getLogger("TranscriptionService")
         self.logger.setLevel(logging.DEBUG)
         
@@ -39,6 +40,7 @@ class TranscriptionService:
                 'debug_mode': debug_mode,
                 'target_language': 'en',  # 默认翻译为英文
                 'registered_at': time.time(),
+                'keywords': [],  # 添加关键词列表字段
             }
             
             # 启动处理器
@@ -62,7 +64,7 @@ class TranscriptionService:
             processor = client['processor']
             
             # 记录详细的音频处理日志
-            self.logger.debug(f"处理客户端 {client_id} 的音频数据，大小: {len(audio_data)} 字节")
+            #self.logger.debug(f"处理客户端 {client_id} 的音频数据，大小: {len(audio_data)} 字节")
             
             # 检查处理器状态
             if not processor.running:
@@ -78,7 +80,8 @@ class TranscriptionService:
             if process_time > 0.1:  # 如果处理时间超过100ms，记录警告
                 self.logger.warning(f"音频处理耗时较长: {process_time*1000:.1f}ms")
             else:
-                self.logger.debug(f"音频处理完成: {process_time*1000:.1f}ms")
+                #self.logger.debug(f"音频处理完成: {process_time*1000:.1f}ms")
+                pass
             
             return True
         except Exception as e:
@@ -221,7 +224,7 @@ class TranscriptionService:
             return False
     
     def get_client_config(self, client_id):
-        """获取客户端当前配置"""
+        """获取客户端配置"""
         if client_id not in self.clients:
             return {"error": "客户端未注册"}
         
@@ -236,7 +239,48 @@ class TranscriptionService:
             "registered_at": client.get('registered_at', 0),
             "processor_running": client['processor'].running if 'processor' in client else False,
             "active": True,
+            "keywords": client.get('keywords', []),  # 添加关键词字段
         }
+    
+    async def update_client_keywords(self, client_id: str, keywords: List[str]) -> bool:
+        """更新客户端关键词
+        
+        这不会触发AudioProcessor重启，只是更新存储的关键词列表。
+        
+        Args:
+            client_id: 客户端ID
+            keywords: 关键词列表
+            
+        Returns:
+            bool: 是否成功更新关键词
+        """
+        if client_id not in self.clients:
+            self.logger.warning(f"客户端 {client_id} 未注册，无法更新关键词")
+            return False
+        
+        try:
+            self.logger.info(f"更新客户端 {client_id} 关键词: {keywords}")
+            self.clients[client_id]['keywords'] = keywords
+            return True
+        except Exception as e:
+            self.logger.error(f"更新客户端 {client_id} 关键词时出错: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
+    def get_client_keywords(self, client_id: str) -> List[str]:
+        """获取客户端关键词列表
+        
+        Args:
+            client_id: 客户端ID
+            
+        Returns:
+            List[str]: 关键词列表，如果客户端不存在返回空列表
+        """
+        if client_id not in self.clients:
+            self.logger.warning(f"客户端 {client_id} 未注册，无法获取关键词")
+            return []
+        
+        return self.clients[client_id].get('keywords', [])
 
     async def cleanup(self) -> None:
         """清理所有客户端资源"""

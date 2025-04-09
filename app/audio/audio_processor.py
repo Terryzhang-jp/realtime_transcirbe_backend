@@ -246,7 +246,7 @@ class AudioProcessor:
             return False
         
         try:
-            self.logger.debug(f"接收到音频数据: {len(audio_data)} 字节")
+            #self.logger.debug(f"接收到音频数据: {len(audio_data)} 字节")
             
             # 处理音频数据块
             is_speech, audio_samples = await self.process_audio_chunk(audio_data)
@@ -260,10 +260,10 @@ class AudioProcessor:
             previous_length = len(self.cumulative_audio)
             if previous_length == 0:
                 self.cumulative_audio = audio_samples
-                self.logger.debug(f"开始累积音频: {len(audio_samples)} 样本")
+                #self.logger.debug(f"开始累积音频: {len(audio_samples)} 样本")
             else:
                 self.cumulative_audio = np.concatenate([self.cumulative_audio, audio_samples])
-                self.logger.debug(f"累积音频: 从 {previous_length} 增加到 {len(self.cumulative_audio)} 样本")
+                #self.logger.debug(f"累积音频: 从 {previous_length} 增加到 {len(self.cumulative_audio)} 样本")
             
             # 更新语音状态
             if is_speech:
@@ -325,8 +325,8 @@ class AudioProcessor:
                 # 重置语音帧计数（但保留语音状态）
                 self.speech_frames = 0
             else:
-                self.logger.debug(f"继续积累音频: 当前 {current_buffer_seconds:.1f}s，上次转写距现在 {time_since_last_transcription:.1f}s")
-            
+                #self.logger.debug(f"继续积累音频: 当前 {current_buffer_seconds:.1f}s，上次转写距现在 {time_since_last_transcription:.1f}s")
+                pass
             # 在累积音频后添加实时转录处理
             if self.enable_realtime_transcription and len(self.cumulative_audio) > 0:
                 # 只有当积累了足够的音频数据时才进行实时转录
@@ -513,7 +513,8 @@ class AudioProcessor:
             self.silero_speech_active = is_speech
             
             if is_speech:
-                self.logger.debug(f"Silero VAD 检测到语音，概率: {speech_prob:.4f}")
+                #self.logger.debug(f"Silero VAD 检测到语音，概率: {speech_prob:.4f}")
+                pass
             
             self.silero_working = False
             return is_speech
@@ -545,7 +546,8 @@ class AudioProcessor:
             self.webrtc_speech_active = is_speech
             
             if is_speech:
-                self.logger.debug(f"WebRTC VAD 检测到语音，比例: {speech_ratio:.2f}")
+                #self.logger.debug(f"WebRTC VAD 检测到语音，比例: {speech_ratio:.2f}")
+                pass
             
             return is_speech
             
